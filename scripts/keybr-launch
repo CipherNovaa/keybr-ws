@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+# keybr-launch — starts the keybr workspace processes if not already running
+
+KEYBR_DIR="$HOME/.local/share/keybr"
+DATA_FILE="$KEYBR_DIR/typing-data.json"
+
+# rename watcher — catches typing-data (1).json etc and renames to typing-data.json.
+# Idempotent: only spawn if one isn't already running (repeated launches used to
+# leak a new `inotifywait -m` every time).
+if ! pgrep -f "inotifywait -m $KEYBR_DIR" >/dev/null 2>&1; then
+    (inotifywait -m "$KEYBR_DIR" -e close_write -e moved_to --format '%f' 2>/dev/null | \
+    while read -r file; do
+        if [[ "$file" == "typing-data"*".json" && "$file" != "typing-data.json" ]]; then
+            mv "$KEYBR_DIR/$file" "$DATA_FILE"
+        fi
+    done) &
+    disown
+fi
+
+# wal colour server
+pgrep -f "wal-server" > /dev/null || "$HOME/.local/bin/wal-server" &
+disown
+
+# stats dashboard — supervised via a transient systemd user service so it
+# persists independently of this launcher and respawns keybr-dash if it ever
+# crashes (no Hyprland restart needed). Launches first to claim the master
+# (top) slot. Idempotent: skips if the service is already active.
+if ! systemctl --user is-active --quiet keybr-dash-supervisor.service 2>/dev/null; then
+    systemctl --user reset-failed keybr-dash-supervisor.service 2>/dev/null
+    systemd-run --user --unit=keybr-dash-supervisor --collect \
+        "$SCRIPT_DIR/keybr-dash-supervisor" >/dev/null 2>&1
+fi
+
+# wait for keybr-dash to open before Chromium
+sleep 3
+
+# Extensions to load: keybr-ext always, plus a staged adblocker if present.
+# keybr.com shows ads to profiles without an adblocker. The desktop profile has
+# uBlock Origin Lite + AdBlock installed from the Web Store; a fresh profile (e.g.
+# the laptop) has neither. If an unpacked adblocker is staged at
+# ~/.local/share/keybr-adblock, load it too (keybr-ext's scanForAdblockNotice()
+# removes the resulting "adblock detected" nag). Staging is per-machine, so this
+# same script works on the desktop (no dir → nothing added, no dupe) and the laptop.
+EXT_LOAD="$HOME/.local/share/keybr-ext"
+[ -d "$HOME/.local/share/keybr-adblock" ] && EXT_LOAD="$EXT_LOAD,$HOME/.local/share/keybr-adblock"
+
+# --disable-gpu ONLY on the Nvidia desktop (GPU-accelerated chromium on
+# Nvidia+XWayland renders a blank/broken window). On AMD (laptop) GPU accel works
+# fine, and keeping it OFF forces the CPU to software-render keybr's animated page
+# (~36% CPU → heat). Detect the GPU and add the flag only when it's Nvidia.
+GPU_FLAG=""
+if lspci 2>/dev/null | grep -qiE 'VGA.*NVIDIA|3D.*NVIDIA'; then GPU_FLAG="--disable-gpu"; fi
+
+# keybr.com browser. If it isn't already up, clear a stale chromium SingletonLock
+# first — a non-clean exit leaves it behind and the next launch silently fails
+# (the "practice window sometimes doesn't open" bug). keybr-restart does the same
+# on demand (right-click the WPM widget).
+if ! pgrep -f "keybr-practice" > /dev/null; then
+    rm -f "$HOME/.local/share/keybr-chromium"/Singleton* 2>/dev/null
+    chromium \
+        --app=https://www.keybr.com \
+        --class=keybr-practice \
+        --ozone-platform=x11 \
+        $GPU_FLAG \
+        --load-extension="$EXT_LOAD" \
+        --user-data-dir="$HOME/.local/share/keybr-chromium"
+fi

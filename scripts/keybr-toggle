@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+# keybr-toggle — show/hide the keybr typing scratchpad (special:keybr).
+#
+# ws7 used to host the keybr dashboard + practice browser, but it's Blender's
+# workspace now. keybr lives in the `special:keybr` scratchpad instead. This
+# launches the processes on first use (keybr-launch is idempotent) and then
+# toggles the scratchpad overlay on/off. Bound to SUPER+SHIFT+T.
+
+# Ensure BOTH the dashboard AND the practice browser are up. keybr-launch is
+# idempotent (it guards each component with its own pgrep), so always calling it
+# brings up whatever's missing. Previously this only checked keybr-dash — so if
+# the dash was alive but the browser had been closed, clicking the WPM counter
+# showed ONLY the graph (no practice window). Backgrounded (it sleeps a few
+# seconds before Chromium) so the toggle happens instantly.
+"$SCRIPT_DIR/keybr-launch" >/dev/null 2>&1 &
+disown
+
+# NOTE: this Hyprland uses the Lua config layer, so `hyprctl dispatch` takes the
+# Lua dispatcher form — the bare `togglespecialworkspace keybr` syntax errors out.
+hyprctl dispatch 'hl.dsp.workspace.toggle_special("keybr")' >/dev/null 2>&1

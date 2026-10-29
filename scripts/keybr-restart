@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+# keybr-restart — one-click recovery + diagnosis for the keybr practice window,
+# which occasionally fails to open. The usual culprit is a stale chromium
+# SingletonLock left behind by a non-clean exit, which makes the next launch
+# silently fail. Bound to RIGHT-CLICK on the WPM waybar widget (custom/keybr-wpm).
+#
+# It reports the state it FOUND and what it did via a desktop notification
+# (quickshell's NotificationServer), so a right-click both fixes and diagnoses.
+set -uo pipefail
+
+CHROME_PROFILE="$HOME/.local/share/keybr-chromium"
+notify() { notify-send -a keybr "keybr" "$1" 2>/dev/null || true; }
+
+# ── diagnose the current state ────────────────────────────────────────────────
+pgrep -x keybr-dash     >/dev/null && dash=up   || dash=down
+pgrep -f keybr-practice >/dev/null && prac=up   || prac=down
+[ -e "$CHROME_PROFILE/SingletonLock" ] && lock=present || lock=absent
+
+# ── recover ───────────────────────────────────────────────────────────────────
+# clear the stale lock (root cause), kill any half-dead practice instance, then
+# re-run the idempotent launcher (brings up whatever's missing: dash, supervisor,
+# rename-watcher, and the practice browser).
+rm -f "$CHROME_PROFILE"/Singleton* 2>/dev/null
+pkill -f keybr-practice 2>/dev/null
+sleep 1
+"$SCRIPT_DIR/keybr-launch" >/dev/null 2>&1 &
+
+# ── wait for the practice window, then report ─────────────────────────────────
+for _ in $(seq 1 20); do
+    pgrep -f keybr-practice >/dev/null && break
+    sleep 1
+done
+
+found="found: dash=$dash practice=$prac lock=$lock"
+if pgrep -f keybr-practice >/dev/null; then
+    notify "practice window recovered ✓  ($found)"
+else
+    notify "practice window STILL down ✗  ($found) — check DISPLAY / chromium"
+fi

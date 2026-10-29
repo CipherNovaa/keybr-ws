@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "keybr-dash bridge",
+  "version": "1.3",
+  "description": "Themes keybr.com with pywal colours and live-syncs lesson data to keybr-dash.",
+  "permissions": ["nativeMessaging", "tabs"],
+  "host_permissions": ["https://www.keybr.com/*", "http://localhost:7799/"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.keybr.com/*"],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.keybr.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ],
+  "background": {"service_worker": "background.js"}
+}

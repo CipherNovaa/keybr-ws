@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# keybr-dash-supervisor — keep the ImGui stats dashboard alive.
+#
+# keybr-dash is a native GLFW/ImGui window on workspace 7. If it ever exits
+# (crash, GPU hiccup), respawn it so the dashboard is always present without a
+# Hyprland restart. A sentinel in the process title makes this idempotent: a
+# second keybr-launch won't start a duplicate supervisor.
+#
+# Sentinel string (do not remove — used by pgrep guards): KEYBR_DASH_SUPERVISOR
+
+DASH="${KEYBR_DASH:-$HOME/.local/bin/keybr-dash}"
+
+while true; do
+    if ! pgrep -x keybr-dash >/dev/null 2>&1; then
+        "$DASH" >/dev/null 2>&1
+        # brief backoff so a binary that dies instantly can't busy-spin
+        sleep 1
+    fi
+    sleep 2
+done

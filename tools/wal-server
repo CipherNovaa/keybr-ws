@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+# wal-server.py — serves pywal colors to the keybr Chromium extension
+#
+# Endpoints:
+#   GET /        — returns colors.json as JSON (used as fallback)
+#   GET /events  — Server-Sent Events stream; pushes new colors the instant
+#                  pywal updates colors.json (sub-second latency)
+#
+# Install: cp wal-server.py ~/.local/bin/wal-server && chmod +x ~/.local/bin/wal-server
+
+import http.server
+import os
+import threading
+import time
+
+COLORS_PATH = os.path.expanduser("~/.cache/wal/colors.json")
+PORT        = 7799
+
+# ── SSE client registry ───────────────────────────────────────────────────────
+# Each connected /events client is stored here so the watcher thread can push
+# to all of them when colors.json changes.
+
+_clients      = []
+_clients_lock = threading.Lock()
+
+def _add_client(handler):
+    with _clients_lock:
+        _clients.append(handler)
+
+def _remove_client(handler):
+    with _clients_lock:
+        if handler in _clients:
+            _clients.remove(handler)
+
+def _notify_all(data: bytes):
+    """Push new colors to every connected SSE client."""
+    msg = b"data: " + data.replace(b"\n", b"") + b"\n\n"
+    with _clients_lock:
+        dead = []
+        for client in _clients:
+            try:
+                client.wfile.write(msg)
+                client.wfile.flush()
+            except Exception:
+                dead.append(client)
+        for c in dead:
+            _clients.remove(c)
+
+# ── File watcher thread ───────────────────────────────────────────────────────
+# Polls colors.json mtime every 0.5s. When it changes, reads the file and
+# pushes the new contents to all SSE clients.
+
+def _watcher():
+    last_mtime = 0.0
+    while True:
+        try:
+            mtime = os.path.getmtime(COLORS_PATH)
+            if mtime != last_mtime:
+                last_mtime = mtime
+                time.sleep(0.1)  # brief pause — let wal finish writing
+                with open(COLORS_PATH, "rb") as f:
+                    data = f.read()
+                _notify_all(data)
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+_watcher_thread = threading.Thread(target=_watcher, daemon=True)
+_watcher_thread.start()
+
+# ── HTTP handler ──────────────────────────────────────────────────────────────
+
+class WalHandler(http.server.BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        if self.path == "/events":
+            self._handle_sse()
+        else:
+            self._handle_colors()
+
+    def _handle_colors(self):
+        """Return the current colors.json contents as JSON."""
+        try:
+            with open(COLORS_PATH, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type",  "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(data)
+        except FileNotFoundError:
+            self.send_response(404)
+            self.end_headers()
+        except Exception:
+            self.send_response(500)
+            self.end_headers()
+
+    def _handle_sse(self):
+        """
+        Long-lived SSE connection. Sends the current colors immediately,
+        then stays open so the watcher thread can push future updates.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type",  "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        # send current colors immediately so the page themes on load
+        try:
+            with open(COLORS_PATH, "rb") as f:
+                data = f.read()
+            msg = b"data: " + data.replace(b"\n", b"") + b"\n\n"
+            self.wfile.write(msg)
+            self.wfile.flush()
+        except Exception:
+            return
+
+        # register so the watcher thread can push to us
+        _add_client(self)
+
+        # keep the connection alive with periodic heartbeat comments
+        # the browser will reconnect automatically if this dies
+        try:
+            while True:
+                time.sleep(25)
+                self.wfile.write(b": heartbeat\n\n")
+                self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            _remove_client(self)
+
+    def log_message(self, *args):
+        pass  # suppress per-request log lines
+
+
+# ── Server ────────────────────────────────────────────────────────────────────
+# ThreadingHTTPServer handles each connection in its own thread, which is
+# required for SSE — the long-lived /events connection would block everything
+# on a single-threaded server.
+
+if __name__ == "__main__":
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), WalHandler)
+    server.serve_forever()
