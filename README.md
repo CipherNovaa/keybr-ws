@@ -49,7 +49,7 @@ The same pass found Chromium was forced into software rendering of keybr's anima
 - **Silent launch failure.** A stale `SingletonLock` from an unclean exit makes the next launch do nothing. `keybr-launch` clears it, and `keybr-restart` clears it, relaunches and reports what it found through a desktop notification.
 - **Extension ID without a copy-paste step.** An unpacked extension's ID is derived from its path (first 32 hex of sha256, mapped to a-p), so `install.sh` computes it and writes the native-messaging manifest from a template.
 
-## Built with AI agents
+## Workflow for this Project
 
 - The CPU fix was found by measuring rather than guessing: the agent profiled the running process, saw it pinned despite the intended 10 fps loop, applied the frame cap, rebuilt, and re-measured CPU and temperature on both machines before calling it done.
 - The live-capture problem was debugged with a diagnostic channel the agent added across the whole stack (page hook, background worker, host log), so the next real lesson would show exactly which call carries a result instead of leaving the next step to guesswork.
